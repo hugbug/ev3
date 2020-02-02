@@ -1,9 +1,7 @@
 #!/usr/bin/env pybricks-micropython
  
-from pybricks import ev3brick as brick
 from pybricks.ev3devices import (Motor)
 from pybricks.parameters import (Port)
-from pybricks.tools import print
  
 import struct
 
@@ -12,7 +10,7 @@ left_stick_middle_x = 0
 left_stick_middle_y = 0
 
 # Minimum required movement of the stick from center position to start motors
-left_stick_threshold = 15
+left_stick_deadzone = 15
 
 # Declare motors 
 left_motor = Motor(Port.B)
@@ -36,16 +34,16 @@ def scale(val, src, dst):
     example: print(scale(99, (0.0, 99.0), (-1.0, +1.0)))
     """
     return (float(val - src[0]) / (src[1] - src[0])) * (dst[1] - dst[0]) + dst[0]
- 
- 
+
+
 # Find the Xbox Controller :
 # /dev/input/event2 is the usual file handler for the gamepad.
 # look at contents of /proc/bus/input/devices if it doesn't work.
 infile_path = "/dev/input/event2"
- 
+
 # open file in binary mode
 in_file = open(infile_path, "rb")
- 
+
 # Read from the file
 # long int, long int, unsigned short, unsigned short, long int
 FORMAT = 'llHHl'
@@ -64,9 +62,9 @@ while event:
     forward = scale(left_stick_y, (0,65535), (100,-100))
     left = scale(left_stick_x, (0,65535), (100,-100))
 
-    # Check stick threshold
-    if (-left_stick_threshold < forward and forward < left_stick_threshold and
-            -left_stick_threshold < left and left < left_stick_threshold):
+    # Check stick deadzone
+    if (-left_stick_deadzone < forward and forward < left_stick_deadzone and
+            -left_stick_deadzone < left and left < left_stick_deadzone):
         left_motor.dc(0)
         right_motor.dc(0)
     else:
@@ -78,5 +76,5 @@ while event:
 
     # Finally, read another event
     event = in_file.read(EVENT_SIZE)
- 
+
 in_file.close()
