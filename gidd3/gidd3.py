@@ -15,6 +15,9 @@ random.seed(0)
 # from the center position to start motors
 stick_deadzone = 5  # deadzone 5%
 
+enable_xbox_detection = True
+enable_ps_detection = True
+
 # Clear program title
 brick.display.clear()
 brick.display.text("Gidd3", (60, 20))
@@ -40,8 +43,9 @@ left_stick_y = 0
 right_trigger = 0
 
 gamepad_device = None
-gamepad_type = None # gamepad_xbox or gamepad_ps
-stick_xbox_deadzone = int(65536 / 100 * stick_deadzone)
+gamepad_type = 0 # gamepad_xbox or gamepad_ps
+# True if Xbox or False if PlayStation
+xbox = None
 
 def find_controller():
     """
@@ -49,29 +53,35 @@ def find_controller():
     looking for gamepad device.
     """
     global gamepad_type
-    in_device = False
     with open("/proc/bus/input/devices", "r") as fp:
         line = fp.readline()
         while line:
-            if line.startswith("N: Name=") and line.find("Xbox") > -1:
-                in_device = True
-            if in_device and line.startswith("H: Handlers=kbd "):
+            if enable_xbox_detection and line.startswith("N: Name=") and line.find("Xbox") > -1:
                 gamepad_type = gamepad_xbox
-                return line[len("H: Handlers=kbd "):].strip()
+            if enable_ps_detection and line.startswith("N: Name=") and line.find("PLAYSTATION") > -1 and line.find("Motion") == -1:
+                gamepad_type = gamepad_ps
+            if gamepad_type > 0 and line.startswith("H: Handlers="):
+                line = line[len("H: Handlers="):]
+                pb = line.find("event")
+                pe = line.find(" ", pb)
+                return line[pb:pe]
             line = fp.readline()
     return None
 
-def transform_stick_xbox(value):
+def transform_stick(value):
     """
-    Transform range 0..65535 to -100..100, remove deadzone from the range
+    Transform range 0..max to -100..100, remove deadzone from the range
     """
-    value -= 32767
-    if abs(value) < stick_xbox_deadzone:
+    max = 65535 if xbox else 255
+    half = int((max + 1) / 2)
+    deadzone = int((max + 1) / 100 * stick_deadzone)
+    value -= half
+    if abs(value) < deadzone:
         value = 0
     elif value > 0:
-        value = (value - stick_xbox_deadzone - 1) / (32767 - stick_xbox_deadzone) * 100
+        value = (value - deadzone - 1) / (half - deadzone) * 100
     else:
-        value = (value + stick_xbox_deadzone) / (32767 - stick_xbox_deadzone) * 100
+        value = (value + deadzone) / (half - deadzone) * 100
     return value
 
 def play_horn():
@@ -101,24 +111,21 @@ def play_sound_effect():
 # /dev/input/event2 is the usual file handler for the gamepad.
 # The contents of /proc/bus/input/devices lists all devices.
 gamepad_device = find_controller()
+#print("Gamepad device:", gamepad_device, ", type:", gamepad_type)
+
+xbox = gamepad_type == gamepad_xbox
+
 if gamepad_device is None:
     brick.display.text("Gamepad not found", (0, 80))
     brick.sound.file(SoundFile.ERROR_ALARM)
     time.sleep(10)
     sys.exit(1)
 
-# currently supporting only Xbox One Controller
-if gamepad_type != gamepad_xbox:
-    brick.display.text("Gamepad not supported", (0, 80))
-    brick.sound.file(SoundFile.ERROR_ALARM)
-    time.sleep(10)
-    sys.exit(1)
-
-brick.display.text("Gamepad functions:", (0, 40))
+brick.display.text(("Xbox" if xbox else "PS") + " gamepad functions:", (0, 40))
 brick.display.text("Left Stick: movement", (0, 60))
-brick.display.text("RT: steering sensitiv.", (0, 70))
-brick.display.text("A: horn", (0, 80))
-brick.display.text("B: sound effect", (0, 90))
+brick.display.text(("RT" if xbox else "R2") + ": steering sensitiv.", (0, 70))
+brick.display.text(("A" if xbox else "X") + ": horn", (0, 80))
+brick.display.text(("B" if xbox else "O") + ": sound effect", (0, 90))
 
 infile_path = "/dev/input/" + gamepad_device
 in_file = open(infile_path, "rb")
@@ -129,31 +136,37 @@ FORMAT = 'llHHl'
 EVENT_SIZE = struct.calcsize(FORMAT)
 event = in_file.read(EVENT_SIZE)
 
+num = 1
 while event:
     (tv_sec, tv_usec, ev_type, code, value) = struct.unpack(FORMAT, event)
 
-    if ev_type == 3 and code == 0: # Left Stick Horz. Axis
-        left_stick_x = transform_stick_xbox(value)
+    if ev_type == 3 or ev_type == 1:
 
-    elif ev_type == 3 and code == 1: # Left Stick Vert. Axis
-        left_stick_y = transform_stick_xbox(value)
+        if ev_type == 3 and code == 0: # Left Stick Horz. Axis
+            left_stick_x = transform_stick(value)
 
-    elif ev_type == 3 and code == 9: # Right Trigger
-        right_trigger = value / 1024
+        elif ev_type == 3 and code == 1: # Left Stick Vert. Axis
+            left_stick_y = transform_stick(value)
 
-    elif ev_type == 1 and code == 304 and value == 1:  # A pressed
-        play_horn()
+        elif xbox and ev_type == 3 and code == 9: # Right Trigger
+            right_trigger = value / 1024
 
-    elif ev_type == 1 and code == 305 and value == 1:  # B pressed
-        play_sound_effect()
+        elif not xbox and ev_type == 3 and code == 5: # R2 paddle
+            right_trigger = value / 256
 
-    #print(left_stick_y, left_stick_x, forward, left)
+        elif ev_type == 1 and code == 304 and value == 1:  # A pressed
+            play_horn()
 
-    # Set motor voltages. If we're steering left, the left motor
-    # must run backwards so it has a -X component
-    # It has a Y component for going forward too. 
-    left_motor.dc(left_stick_y - left_stick_x * (1 - right_trigger / 1.1))
-    right_motor.dc(left_stick_y + left_stick_x * (1 - right_trigger / 1.1))
+        elif ev_type == 1 and code == 305 and value == 1:  # B pressed
+            play_sound_effect()
+
+        #print(left_stick_y, left_stick_x)
+
+        # Set motor voltages. If we're steering left, the left motor
+        # must run backwards so it has a -X component
+        # It has a Y component for going forward too. 
+        left_motor.dc(left_stick_y - left_stick_x * (1 - right_trigger / 1.1))
+        right_motor.dc(left_stick_y + left_stick_x * (1 - right_trigger / 1.1))
 
     # Finally, read another event
     event = in_file.read(EVENT_SIZE)
