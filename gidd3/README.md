@@ -1,6 +1,6 @@
 # MOC-35675 Gidd3
 
-This is a program to use Xbox One or PlayStation controllers to remotely control the LEGO EV3 Model **Gidd3** [MOC-35675](https://rebrickable.com/mocs/MOC-35675.
+This is a program to use Xbox One or PlayStation controllers to remotely control the LEGO EV3 Model **Gidd3** [MOC-35675](https://rebrickable.com/mocs/MOC-35675).
 
 The model has two motors and very large wheels.
 
