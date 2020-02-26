@@ -32,21 +32,21 @@ while event:
                 button = "A"
             elif code == 305:
                 button = "B"
-            elif code == 306:
-                button = "X"
             elif code == 307:
-                button = "Y"
+                button = "X"
             elif code == 308:
-                button = "LB"
-            elif code == 309:
-                button = "RB"
+                button = "Y"
             elif code == 310:
-                button = "BACK"
+                button = "LB"
             elif code == 311:
+                button = "RB"
+            elif code == 158:
+                button = "BACK"
+            elif code == 315:
                 button = "MENU"
-            elif code == 312:
+            elif code == 317:
                 button = "LEFT STICK"
-            elif code == 313:
+            elif code == 318:
                 button = "RIGHT STICK"
 
         elif ev_type == 3:
