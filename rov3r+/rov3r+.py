@@ -44,11 +44,11 @@ gamepad_xbox = 1
 gamepad_ps = 2
 
 # Initialize variables. 
-# Assuming sticks are in the middle and triggera are not pressed when starting
-left_stick_x = 0
-left_stick_y = 0
-right_trigger = 0
+# Assuming sticks are in the middle and triggers are not pressed when starting
 gear = 1
+power_pos = 0
+bump_factor = 0
+steering_pos = 0
 
 gamepad_device = None
 gamepad_type = 0 # gamepad_xbox or gamepad_ps
@@ -166,13 +166,35 @@ def print_help():
     brick.display.text(("X" if xbox else "/\\") + ": horn", (0, 85))
     brick.display.text(("Y" if xbox else "[]") + ": sound effect", (0, 95))
 
-propulsion_power = 0
-steering_angle = 0
-gearing_angle = 0
+def drive(_power_pos, _bump_factor):
+    global power_pos, bump_factor
+    if _power_pos == None:
+        _power_pos = power_pos
+    if _bump_factor == None:
+        _bump_factor = bump_factor
+    if power_pos != _power_pos or bump_factor != _bump_factor:
+        power_pos = _power_pos
+        bump_factor = _bump_factor
+        propulsion_power = power_pos * (1 + bump_factor)    
+        first_motor.dc(propulsion_power)
+        second_motor.dc(propulsion_power)
+
+def steer(_steering_pos):
+    global steering_pos
+    if steering_pos != _steering_pos:
+        steering_pos = _steering_pos
+        steering_angle = - steering_pos * max_steering_angle / 100
+        steering_motor.track_target(steering_angle)
+
+def switch_gear(_gear):
+    global gear
+    if gear != _gear:
+        gear = _gear
+        gearing_angle = - (gear - 1) * 20 / 12 * 90
+        gearbox_motor.track_target(gearing_angle)
 
 def process_gamepad_event(in_file):
-    global left_stick_x, left_stick_y, right_trigger, gear, use_polls
-    global propulsion_power, steering_angle, gearing_angle
+    global use_polls
 
     # Read from the file
     event = in_file.read(event_size)
@@ -182,22 +204,22 @@ def process_gamepad_event(in_file):
     if ev_type == 3 or ev_type == 1:
 
         if ev_type == 3 and code == 0: # Left Stick Horz. Axis
-            left_stick_x = transform_stick(value)
+            steer(transform_stick(value))
 
         elif ev_type == 3 and code == 1: # Left Stick Vert. Axis
-            left_stick_y = transform_stick(value)
+            drive(transform_stick(value), None)
 
         elif xbox and ev_type == 3 and code == 9: # Xbox Right Trigger
-            right_trigger = value / 1024
+            drive(None, value / 1024)
 
         elif not xbox and ev_type == 3 and code == 5: # PS R2 paddle
-            right_trigger = value / 256
+            drive(None, value / 256)
 
         elif ev_type == 1 and code == 311 and value == 1: # RB pressed
-            gear = min(gear + 1, 4)
+            switch_gear(min(gear + 1, 4))
 
         elif ev_type == 1 and code == 310 and value == 1:  # LB pressed
-            gear = max(gear - 1, 1)
+            switch_gear(max(gear - 1, 1))
 
         elif ev_type == 1 and code == 307 and value == 1:  # X pressed
             play_horn()
@@ -208,29 +230,6 @@ def process_gamepad_event(in_file):
         elif ev_type == 1 and code == 315 and value == 1:  # menu pressed
             use_polls = not use_polls
             brick.sound.file(SoundFile.GREEN if use_polls else SoundFile.RED)
-
-        last_propulsion_power = propulsion_power
-        last_steering_angle = steering_angle
-        last_gearing_angle = gearing_angle
-
-        # Calculate motor power and angles
-        propulsion_power = left_stick_y * (1 + right_trigger)
-        steering_angle = - left_stick_x * max_steering_angle / 100
-        gearing_angle = - (gear - 1) * 20 / 12 * 90
-
-        #print(left_stick_y, left_stick_x, gear, propulsion_power, steering_angle, gearing_angle)
-
-        # Set motor power and angles (if changed)
-
-        if last_propulsion_power != propulsion_power:
-            first_motor.dc(propulsion_power)
-            second_motor.dc(propulsion_power)
-
-        if last_steering_angle != steering_angle:
-            steering_motor.track_target(steering_angle)
-
-        if last_gearing_angle != gearing_angle:
-            gearbox_motor.track_target(gearing_angle)
 
 # Find the gamepad:
 # /dev/input/event2 is the usual file handler for the gamepad.
