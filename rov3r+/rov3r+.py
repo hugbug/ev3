@@ -1,5 +1,20 @@
 #!/usr/bin/env pybricks-micropython
- 
+
+#  This file is part of ev3 repository. See <https://github.com/hugbug/ev3>.
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 from pybricks.ev3devices import (Motor)
 from pybricks.parameters import (Port, SoundFile, Stop)
 from pybricks import ev3brick as brick
@@ -12,30 +27,16 @@ import random
 random.seed(0)
 
 # Defining stick dead zone which is a minimum amount of stick movement
-# from the center position to start motors
+# from the center position to start motors.
 stick_deadzone = 5  # deadzone 5%
 
-# Max steering angle for steering motor (in degrees)
+# Max steering angle for steering motor (in degrees) initialized here for debug purposes,
+# it will be computed and adjusted automatically druing motor calibratation process.
 max_steering_angle = 300
 
+# One of these can be disabled if you have connected both gamepads and want to use a particular one.
 enable_xbox_detection = True
 enable_ps_detection = True
-
-# Clear program title
-brick.display.clear()
-brick.display.text("Rov3r+", (60, 20))
-
-# Declare motors
-try:
-    first_motor = Motor(Port.A)
-    second_motor = Motor(Port.D)
-    steering_motor = Motor(Port.B)
-    gearbox_motor = Motor(Port.C)
-except:
-    brick.display.text("Check motor cables", (0, 80))
-    brick.sound.file(SoundFile.ERROR_ALARM)
-    time.sleep(10)
-    sys.exit(1)
 
 # Constants
 gamepad_xbox = 1
@@ -53,7 +54,27 @@ gamepad_type = 0 # gamepad_xbox or gamepad_ps
 # True if Xbox or False if PlayStation
 xbox = None
 
-def find_controller():
+# long int, long int, unsigned short, unsigned short, long int
+event_format = 'llHHl'
+event_size = struct.calcsize(event_format)
+
+# Clear program title
+brick.display.clear()
+brick.display.text("Rov3r+", (60, 20))
+
+# Declare motors and check their connections
+try:
+    first_motor = Motor(Port.A)
+    second_motor = Motor(Port.D)
+    steering_motor = Motor(Port.B)
+    gearbox_motor = Motor(Port.C)
+except:
+    brick.display.text("Check motor cables", (0, 80))
+    brick.sound.file(SoundFile.ERROR_ALARM)
+    time.sleep(10)
+    sys.exit(1)
+
+def find_gamepad():
     """
     Checks device list by reading content of virtual file "/proc/bus/input/devices"
     looking for gamepad device.
@@ -128,45 +149,30 @@ def calibrate_motors():
     steering_motor.run_until_stalled(360, Stop.COAST, 80)
     steering_motor.reset_angle(0)
     steering_motor.run_until_stalled(-360, Stop.COAST, 80)
-    max_steering_angle = steering_motor.angle() / 2
-    steering_motor.run_target(360, max_steering_angle)
+    max_steering_angle = abs(steering_motor.angle()) / 2
+    steering_motor.run_target(360, -max_steering_angle)
     steering_motor.reset_angle(0)
     max_steering_angle *= 0.90  # limit max steering angle a little
 
-# Find the gamepad:
-# /dev/input/event2 is the usual file handler for the gamepad.
-# The contents of /proc/bus/input/devices lists all devices.
-gamepad_device = find_controller()
-#print("Gamepad device:", gamepad_device, ", type:", gamepad_type)
+def print_help():
+    brick.display.text(("Xbox" if xbox else "PS") + " gamepad functions:", (0, 40))
+    brick.display.text("Left Stick: movement", (0, 55))
+    brick.display.text(("RB/LB" if xbox else "R1/L1") + ": gear up/down", (0, 65))
+    brick.display.text(("RT" if xbox else "R2") + ": steer. speed bump", (0, 75))
+    brick.display.text(("X" if xbox else "/\\") + ": horn", (0, 85))
+    brick.display.text(("Y" if xbox else "[]") + ": sound effect", (0, 95))
 
-xbox = gamepad_type == gamepad_xbox
+propulsion_power = 0
+steering_angle = 0
+gearing_angle = 0
 
-if gamepad_device is None:
-    brick.display.text("Gamepad not found", (0, 80))
-    brick.sound.file(SoundFile.ERROR_ALARM)
-    time.sleep(10)
-    sys.exit(1)
+def process_gamepad_event(in_file):
+    global left_stick_x, left_stick_y, right_trigger, gear
 
-brick.display.text(("Xbox" if xbox else "PS") + " gamepad functions:", (0, 40))
-brick.display.text("Left Stick: movement", (0, 55))
-brick.display.text(("RB/LB" if xbox else "R1/L1") + ": gear up/down", (0, 65))
-brick.display.text(("RT" if xbox else "R2") + ": steer. speed bump", (0, 75))
-brick.display.text(("X" if xbox else "/\\") + ": horn", (0, 85))
-brick.display.text(("Y" if xbox else "[]") + ": sound effect", (0, 95))
+    # Read from the file
+    event = in_file.read(event_size)
 
-infile_path = "/dev/input/" + gamepad_device
-in_file = open(infile_path, "rb")
-
-calibrate_motors()
-
-# Read from the file
-# long int, long int, unsigned short, unsigned short, long int
-FORMAT = 'llHHl'
-EVENT_SIZE = struct.calcsize(FORMAT)
-event = in_file.read(EVENT_SIZE)
-
-while event:
-    (tv_sec, tv_usec, ev_type, code, value) = struct.unpack(FORMAT, event)
+    (tv_sec, tv_usec, ev_type, code, value) = struct.unpack(event_format, event)
 
     if ev_type == 3 or ev_type == 1:
 
@@ -196,7 +202,7 @@ while event:
 
         # Calculate motor power and angles
         propulsion_power = left_stick_y * (1 + right_trigger)
-        steering_angle = left_stick_x * max_steering_angle / 100
+        steering_angle = - left_stick_x * max_steering_angle / 100
         gearing_angle = - (gear - 1) * 20 / 12 * 90
 
         #print(left_stick_y, left_stick_x, gear, propulsion_power, steering_angle, gearing_angle)
@@ -207,7 +213,27 @@ while event:
         steering_motor.track_target(steering_angle)
         gearbox_motor.track_target(gearing_angle)
 
-    # Finally, read another event
-    event = in_file.read(EVENT_SIZE)
+# Find the gamepad:
+# /dev/input/event2 is the usual file handler for the gamepad.
+# The contents of /proc/bus/input/devices lists all devices.
+gamepad_device = find_gamepad()
+xbox = gamepad_type == gamepad_xbox
+#print("Gamepad device:", gamepad_device, ", type:", gamepad_type)
 
-in_file.close()
+if gamepad_device is None:
+    brick.display.text("Gamepad not found", (0, 80))
+    brick.sound.file(SoundFile.ERROR_ALARM)
+    time.sleep(10)
+    sys.exit(1)
+
+gamepad_infile_path = "/dev/input/" + gamepad_device
+gamepad_infile = open(gamepad_infile_path, "rb")
+
+print_help()
+
+calibrate_motors()
+
+while True:
+    process_gamepad_event(gamepad_infile)
+
+gamepad_infile.close() # will never executed actually, due to endless while loop
