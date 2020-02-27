@@ -23,6 +23,7 @@ import time
 import struct
 import sys
 import random
+import uselect
 
 random.seed(0)
 
@@ -53,6 +54,9 @@ gamepad_device = None
 gamepad_type = 0 # gamepad_xbox or gamepad_ps
 # True if Xbox or False if PlayStation
 xbox = None
+
+# Use event polling instead of blocking read (this feature is currently in testing)
+use_polls = False
 
 # long int, long int, unsigned short, unsigned short, long int
 event_format = 'llHHl'
@@ -167,7 +171,8 @@ steering_angle = 0
 gearing_angle = 0
 
 def process_gamepad_event(in_file):
-    global left_stick_x, left_stick_y, right_trigger, gear
+    global left_stick_x, left_stick_y, right_trigger, gear, use_polls
+    global propulsion_power, steering_angle, gearing_angle
 
     # Read from the file
     event = in_file.read(event_size)
@@ -200,6 +205,14 @@ def process_gamepad_event(in_file):
         elif ev_type == 1 and code == 308 and value == 1:  # Y pressed
             play_sound_effect()
 
+        elif ev_type == 1 and code == 315 and value == 1:  # menu pressed
+            use_polls = not use_polls
+            brick.sound.file(SoundFile.GREEN if use_polls else SoundFile.RED)
+
+        last_propulsion_power = propulsion_power
+        last_steering_angle = steering_angle
+        last_gearing_angle = gearing_angle
+
         # Calculate motor power and angles
         propulsion_power = left_stick_y * (1 + right_trigger)
         steering_angle = - left_stick_x * max_steering_angle / 100
@@ -207,11 +220,17 @@ def process_gamepad_event(in_file):
 
         #print(left_stick_y, left_stick_x, gear, propulsion_power, steering_angle, gearing_angle)
 
-        # Set motor power and angles
-        first_motor.dc(propulsion_power)
-        second_motor.dc(propulsion_power)
-        steering_motor.track_target(steering_angle)
-        gearbox_motor.track_target(gearing_angle)
+        # Set motor power and angles (if changed)
+
+        if last_propulsion_power != propulsion_power:
+            first_motor.dc(propulsion_power)
+            second_motor.dc(propulsion_power)
+
+        if last_steering_angle != steering_angle:
+            steering_motor.track_target(steering_angle)
+
+        if last_gearing_angle != gearing_angle:
+            gearbox_motor.track_target(gearing_angle)
 
 # Find the gamepad:
 # /dev/input/event2 is the usual file handler for the gamepad.
@@ -233,7 +252,28 @@ print_help()
 
 calibrate_motors()
 
+event_selector = uselect.poll()
+event_selector.register(gamepad_infile, uselect.POLLIN)
+
 while True:
-    process_gamepad_event(gamepad_infile)
+    if use_polls:
+        events = event_selector.poll(0)
+    if not use_polls or (len(events) > 0 and events[0][1] & uselect.POLLIN):
+        process_gamepad_event(gamepad_infile)
+    else:
+        # Doing something else here...
+        # This code is executed when there are no gamepad events to proceed.
+        # Here we can check sensors and/or do some other work.
+        # Currently we just sleep for 10ms. That makes the loop body to be executed
+        # about 100 times per second. That's enough FPS for the gamepad control.
+        # Reducing of the sleep time will increase FPS but also the CPU load
+        # and power consumption.
+        # When adding code for a useful work keep in mind, that during its
+        # execution the gamepad events are not processed. Therefore the code
+        # should not run too long or the gamepad becomes laggy.
+        # Reduce or remove the sleep time if necessary.
+        time.sleep(0.010)
+        #brick.sound.beep()
+        #print("Doing something else: ", time.time())
 
 gamepad_infile.close() # will never executed actually, due to endless while loop
