@@ -39,9 +39,37 @@ max_steering_angle = 300
 enable_xbox_detection = True
 enable_ps_detection = True
 
-# Constants
+# Constants for gamepad type
 gamepad_xbox = 1
 gamepad_ps = 2
+
+# Gamepad state
+gamepad_device = None
+gamepad_type = 0 # gamepad_xbox or gamepad_ps
+# True if Xbox or False if PlayStation
+xbox = None
+
+# Constants for gearbox mode
+gearbox_manual = 1
+gearbox_auto = 2
+
+# Gearbox state
+gearbox_mode = gearbox_auto
+
+# Constants for automatic gearbox
+# Four gears. For each gear:
+#  A) maximum RPM of the gear
+#  B) minimum Motor Power to gear up
+#  C) minimum RPM to gear up
+#  D) how long the C-RPM and B-Motor-Power should be kept to gear up
+#  E) Motor Power to gear down
+#  F) RPM to gear down
+#  G) how long the F-RPM and E-Motor-Power should be kept to gear down
+automatic_gearbox = (
+    (900, 70, 400, 0.3, 0, 0, 0), # Gear 1
+    (900, 80, 500, 0.3, 50, 400, 1.0), # Gear 2
+    (870, 90, 600, 0.5, 60, 400, 0.7), # Gear 3
+    (820, 110, 10000, 1.0, 70, 400, 0.7)) # Gear 4
 
 # Initialize variables. 
 # Assuming sticks are in the middle and triggers are not pressed when starting
@@ -50,17 +78,9 @@ power_pos = 0
 bump_factor = 0
 steering_pos = 0
 
-gamepad_device = None
-gamepad_type = 0 # gamepad_xbox or gamepad_ps
-# True if Xbox or False if PlayStation
-xbox = None
-
-# Use event polling instead of blocking read (this feature is currently in testing)
-use_polls = False
-
 # long int, long int, unsigned short, unsigned short, long int
-event_format = 'llHHl'
-event_size = struct.calcsize(event_format)
+gamepad_event_format = 'llHHl'
+gamepad_event_size = struct.calcsize(gamepad_event_format)
 
 # Clear program title
 brick.display.clear()
@@ -150,21 +170,25 @@ def calibrate_motors():
     gearbox_motor.run_angle(100, -20) # unstress the switcher
     gearbox_motor.reset_angle(0)
 
-    steering_motor.run_until_stalled(360, Stop.COAST, 80)
+    steering_motor.run_until_stalled(720, Stop.COAST, 80)
     steering_motor.reset_angle(0)
-    steering_motor.run_until_stalled(-360, Stop.COAST, 80)
+    steering_motor.run_until_stalled(-720, Stop.COAST, 80)
     max_steering_angle = abs(steering_motor.angle()) / 2
-    steering_motor.run_target(360, -max_steering_angle)
+    steering_motor.run_target(720, -max_steering_angle)
     steering_motor.reset_angle(0)
     max_steering_angle *= 0.90  # limit max steering angle a little
 
 def print_help():
+    brick.display.clear()
+    brick.display.text("Rov3r+", (60, 20))
     brick.display.text(("Xbox" if xbox else "PS") + " gamepad functions:", (0, 40))
     brick.display.text("Left Stick: movement", (0, 55))
     brick.display.text(("RB/LB" if xbox else "R1/L1") + ": gear up/down", (0, 65))
-    brick.display.text(("RT" if xbox else "R2") + ": steer. speed bump", (0, 75))
-    brick.display.text(("X" if xbox else "/\\") + ": horn", (0, 85))
-    brick.display.text(("Y" if xbox else "[]") + ": sound effect", (0, 95))
+    brick.display.text(("A" if xbox else "X") + ": automatic gearbox", (0, 75))
+    brick.display.text(("RT" if xbox else "R2") + ": steer. speed bump", (0, 85))
+    brick.display.text(("X" if xbox else "/\\") + ": horn", (0, 95))
+    brick.display.text(("Y" if xbox else "[]") + ": sound effect", (0, 105))
+    brick.display.text("Gearbox:" + ("manual" if gearbox_mode == gearbox_manual else "automatic"), (0, 125))
 
 def drive(_power_pos, _bump_factor):
     global power_pos, bump_factor
@@ -193,13 +217,68 @@ def switch_gear(_gear):
         gearing_angle = - (gear - 1) * 20 / 12 * 90
         gearbox_motor.track_target(gearing_angle)
 
-def process_gamepad_event(in_file):
-    global use_polls
+gear_up_time = 0
+gear_down_time = 0
+last_debug_time = 0
 
-    # Read from the file
-    event = in_file.read(event_size)
+def automatic_gearbox_control():
+    global gear_up_time, gear_down_time, last_debug_time
 
-    (tv_sec, tv_usec, ev_type, code, value) = struct.unpack(event_format, event)
+    speed = abs(first_motor.speed())
+
+    #tm = time.time()
+    #if round(tm) != round(last_debug_time):
+    #    print(speed, power_pos, tm - gear_up_time)
+    #last_debug_time = tm
+
+    # Did we stop?
+    if abs(power_pos) == 0 and speed == 0 and gear > 1:
+        #print("Reset gear to", 1)
+        switch_gear(1)
+
+    gear_data = automatic_gearbox[gear - 1]
+
+    # Can we gear up?
+    if abs(power_pos) >= gear_data[1] and speed >= gear_data[2]:
+        tm = time.time()
+        if gear_up_time == 0:
+            gear_up_time = tm
+        elif tm - gear_up_time >= gear_data[3] and gear < len(automatic_gearbox):
+            # It's time to switch to the next gear 
+            #print("Gear up to", gear + 1)
+            switch_gear(gear + 1)
+            gear_up_time = 0
+    else:
+        gear_up_time = 0
+
+    # Should we gear down?
+    if abs(power_pos) <= gear_data[4] or speed <= gear_data[5]:
+        tm = time.time()
+        if gear_down_time == 0:
+            gear_down_time = tm
+        elif tm - gear_down_time >= gear_data[6] and gear > 1:
+            # It's time to switch to the previous gear 
+            #print("Gear down to", gear + 1)
+            switch_gear(gear - 1)
+            gear_down_time = 0
+    else:
+        gear_down_time = 0
+
+def select_gearbox_mode(mode):
+    global gearbox_mode
+    if mode != gearbox_mode:
+        gearbox_mode = mode
+        print_help()
+        if gearbox_mode == gearbox_manual:
+            brick.sound.beeps(1)
+        else:
+            brick.sound.beeps(2)
+
+def process_gamepad_event(device_file):
+    # Read from the gamepad device virtual file
+    event = device_file.read(gamepad_event_size)
+
+    (tv_sec, tv_usec, ev_type, code, value) = struct.unpack(gamepad_event_format, event)
 
     if ev_type == 3 or ev_type == 1:
 
@@ -217,23 +296,22 @@ def process_gamepad_event(in_file):
 
         elif ev_type == 1 and code == 311 and value == 1: # RB pressed
             switch_gear(min(gear + 1, 4))
+            select_gearbox_mode(gearbox_manual)
 
-        elif ev_type == 1 and code == 310 and value == 1:  # LB pressed
+        elif ev_type == 1 and code == 310 and value == 1: # LB pressed
             switch_gear(max(gear - 1, 1))
+            select_gearbox_mode(gearbox_manual)
 
-        elif ev_type == 1 and code == 307 and value == 1:  # X pressed
+        elif ev_type == 1 and code == 304 and value == 1: # A pressed
+            select_gearbox_mode(gearbox_auto)
+
+        elif ev_type == 1 and code == 307 and value == 1: # X pressed
             play_horn()
 
-        elif ev_type == 1 and code == 308 and value == 1:  # Y pressed
+        elif ev_type == 1 and code == 308 and value == 1: # Y pressed
             play_sound_effect()
 
-        elif ev_type == 1 and code == 315 and value == 1:  # menu pressed
-            use_polls = not use_polls
-            brick.sound.file(SoundFile.GREEN if use_polls else SoundFile.RED)
-
-# Find the gamepad:
-# /dev/input/event2 is the usual file handler for the gamepad.
-# The contents of /proc/bus/input/devices lists all devices.
+# Find the gamepad
 gamepad_device = find_gamepad()
 xbox = gamepad_type == gamepad_xbox
 #print("Gamepad device:", gamepad_device, ", type:", gamepad_type)
@@ -251,28 +329,22 @@ print_help()
 
 calibrate_motors()
 
+# We use event polling mechanism to read from gamepad virtual device file.
+# This allows us to check if there are new data in the file before attempting
+# to read from it. As a result the "read from file"-function never blocks
+# and we can do some other work when there are no gamepad events.
 event_selector = uselect.poll()
 event_selector.register(gamepad_infile, uselect.POLLIN)
 
 while True:
-    if use_polls:
-        events = event_selector.poll(0)
-    if not use_polls or (len(events) > 0 and events[0][1] & uselect.POLLIN):
+    events = event_selector.poll(0)
+    if (len(events) > 0 and events[0][1] & uselect.POLLIN):
         process_gamepad_event(gamepad_infile)
     else:
-        # Doing something else here...
         # This code is executed when there are no gamepad events to proceed.
-        # Here we can check sensors and/or do some other work.
-        # Currently we just sleep for 10ms. That makes the loop body to be executed
-        # about 100 times per second. That's enough FPS for the gamepad control.
-        # Reducing of the sleep time will increase FPS but also the CPU load
-        # and power consumption.
-        # When adding code for a useful work keep in mind, that during its
-        # execution the gamepad events are not processed. Therefore the code
-        # should not run too long or the gamepad becomes laggy.
-        # Reduce or remove the sleep time if necessary.
-        time.sleep(0.010)
-        #brick.sound.beep()
-        #print("Doing something else: ", time.time())
+        # Here we can check sensors or do some other work.
+        if gearbox_mode != gearbox_manual:
+            automatic_gearbox_control()
+        time.sleep(0.010) # sleep a little to reduce power consumption
 
 gamepad_infile.close() # will never executed actually, due to endless while loop
