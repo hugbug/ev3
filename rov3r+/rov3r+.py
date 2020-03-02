@@ -1,6 +1,9 @@
 #!/usr/bin/env pybricks-micropython
 
-#  This file is part of ev3 repository. See <https://github.com/hugbug/ev3>.
+#  This file is part of hugbug ev3 repository. See <https://github.com/hugbug/ev3>.
+#
+#  This is a program to use Xbox or PS controller to remotely control the
+#  LEGO EV3 Model Rov3r+ MOC-20177 (https://rebrickable.com/mocs/MOC-20177).
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -16,7 +19,7 @@
 #  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from pybricks.ev3devices import (Motor)
-from pybricks.parameters import (Port, SoundFile, Stop)
+from pybricks.parameters import (Port, SoundFile, Stop, Direction)
 from pybricks import ev3brick as brick
 from pybricks.tools import print
 import time
@@ -31,65 +34,86 @@ random.seed(0)
 # from the center position to start motors.
 stick_deadzone = 5  # deadzone 5%
 
-# Max steering angle for steering motor (in degrees) initialized here for debug purposes,
-# it will be computed and adjusted automatically druing motor calibratation process.
+# Max steering angle for steering motor (in degrees).
+# It is computed automatically during motor calibratation process.
+# Here initialized with default value for debug purposes.
 max_steering_angle = 300
 
 # One of these can be disabled if you have connected both gamepads and want to use a particular one.
 enable_xbox_detection = True
 enable_ps_detection = True
 
-# Constants for gamepad type
+# Constants for gamepad type.
 gamepad_xbox = 1
 gamepad_ps = 2
 
-# Gamepad state
+# Gamepad state.
 gamepad_device = None
 gamepad_type = 0 # gamepad_xbox or gamepad_ps
-# True if Xbox or False if PlayStation
-xbox = None
+xbox = None # True if Xbox or False if PlayStation
 
-# Constants for gearbox mode
+# Constants for gearbox mode.
 gearbox_manual = 1
-gearbox_auto = 2
+gearbox_auto_sport = 2
+gearbox_auto_comfort = 3
 
-# Gearbox state
-gearbox_mode = gearbox_auto
+# Gearbox mode, initialized to default gearbox mode upon start.
+gearbox_mode = gearbox_auto_sport
 
-# Constants for automatic gearbox
+# Constants for automatic sport gearbox.
 # Four gears. For each gear:
 #  A) maximum RPM of the gear
-#  B) minimum Motor Power to gear up
-#  C) minimum RPM to gear up
-#  D) how long the C-RPM and B-Motor-Power should be kept to gear up
+#  B) Motor Power to gear up
+#  C) RPM to gear up
+#  D) gear up when the Motor-Power and RPM both are above B/C for as long seconds
 #  E) Motor Power to gear down
 #  F) RPM to gear down
-#  G) how long the F-RPM and E-Motor-Power should be kept to gear down
-automatic_gearbox = (
-    (900, 70, 400, 0.3, 0, 0, 0), # Gear 1
-    (900, 80, 500, 0.3, 50, 400, 1.0), # Gear 2
-    (870, 90, 600, 0.5, 60, 400, 0.7), # Gear 3
-    (820, 110, 10000, 1.0, 70, 400, 0.7)) # Gear 4
+#  G) gear down when the Motor-Power or RPM go below E/F for as long seconds
+automatic_sport_gearbox = (
+    (900, 70, 600, 0.6, 0, 0, 0), # Gear 1
+    (900, 80, 650, 0.6, 50, 400, 0.3), # Gear 2
+    (870, 90, 700, 0.7, 60, 500, 0.3), # Gear 3
+    (820, 110, 10000, 1.0, 70, 550, 0.3)) # Gear 4
 
-# Initialize variables. 
+# Constants for automatic comfort gearbox.
+# Four gears. For each gear:
+#  A) maximum RPM of the gear
+#  B) Motor Power to gear up
+#  C) RPM to gear up
+#  D) gear up when the Motor-Power and RPM both are above B/C for as long seconds
+#  E) Motor Power to gear down
+#  F) RPM to gear down
+#  G) gear down when the Motor-Power or RPM go below E/F for as long seconds
+#  H) gear up ratio compensation
+#  I) gear up compensation time
+#  J) gear down ratio compensation
+#  K) gear down compensation time
+automatic_comfort_gearbox = (
+    (900, 70, 500, 0.7, 0, 0, 0, 0.8, 0, 0, 0), # Gear 1, 1:1 ratio
+    (900, 80, 550, 1.0, 50, 400, 0.3, 0.8, 1.0, 1.2, 0), # Gear 2, 1:1.67 ratio
+    (870, 90, 600, 1.0, 50, 450, 0.3, 0.8, 1.0, 1.2, 0.3), # Gear 3, 1:3 ratio
+    (820, 110, 10000, 1.0, 50, 450, 0.3, 0, 0, 1.2, 0.3)) # Gear 4, 1:5 ratio
+
 # Assuming sticks are in the middle and triggers are not pressed when starting
-gear = 1
-power_pos = 0
-bump_factor = 0
-steering_pos = 0
+gear = 1 # Current gear (1..4)
+power_pos = 0 # Current motor power (controlled by Y-axis of gamepad left stick) (-100..100)
+power_bump = 0 # Power bump (controller by right trigger)
+power_compensation = 1.0 # Power compensation after switching gears in comfort automatic mode
+steering_pos = 0 # Steering position (-100..100)
 
+# An events read from the virtual device file consists of the following elements:
 # long int, long int, unsigned short, unsigned short, long int
 gamepad_event_format = 'llHHl'
 gamepad_event_size = struct.calcsize(gamepad_event_format)
 
-# Clear program title
+# Clear program title.
 brick.display.clear()
 brick.display.text("Rov3r+", (60, 20))
 
-# Declare motors and check their connections
+# Declare motors and check their connections.
 try:
-    first_motor = Motor(Port.A)
-    second_motor = Motor(Port.D)
+    first_motor = Motor(Port.A, Direction.COUNTERCLOCKWISE)
+    second_motor = Motor(Port.D, Direction.COUNTERCLOCKWISE)
     steering_motor = Motor(Port.B)
     gearbox_motor = Motor(Port.C)
 except:
@@ -121,7 +145,7 @@ def find_gamepad():
 
 def transform_stick(value):
     """
-    Transform range 0..max to -100..100, remove deadzone from the range
+    Transforms range 0..max to -100..100, removes deadzone from the range.
     """
     max = 65535 if xbox else 255
     half = int((max + 1) / 2)
@@ -137,7 +161,7 @@ def transform_stick(value):
 
 def play_horn():
     """
-    Plays a horn sound randomly selected from two available sounds
+    Plays a horn sound randomly selected from two available sounds.
     """
     if random.randint(1, 2) == 1:
         brick.sound.file(SoundFile.HORN_1)
@@ -146,7 +170,7 @@ def play_horn():
 
 def play_sound_effect():
     """
-    Plays a random sound effect
+    Plays a random sound effect.
     """
     effect = random.randint(1, 4)
     if effect == 1:
@@ -160,9 +184,9 @@ def play_sound_effect():
 
 def calibrate_motors():
     """
-    Calibrate gearbox motor: switch to first gear.
-    Calibrate steering motor: find the range by steering full to the left and full to the right,
-    then center the steering.
+    Calibrates gearbox motor: switches to first gear.
+    Calibrates steering motor: finds the range by steering full to the left
+    and full to the right, then centers the steering.
     """
     global max_steering_angle
 
@@ -179,31 +203,48 @@ def calibrate_motors():
     max_steering_angle *= 0.90  # limit max steering angle a little
 
 def print_help():
+    """
+    Prints program info and gamepad mapping to the brick display.
+    Also prints current gearbox mode in the status line.
+    """
     brick.display.clear()
-    brick.display.text("Rov3r+", (60, 20))
-    brick.display.text(("Xbox" if xbox else "PS") + " gamepad functions:", (0, 40))
-    brick.display.text("Left Stick: movement", (0, 55))
-    brick.display.text(("RB/LB" if xbox else "R1/L1") + ": gear up/down", (0, 65))
-    brick.display.text(("A" if xbox else "X") + ": automatic gearbox", (0, 75))
-    brick.display.text(("RT" if xbox else "R2") + ": steer. speed bump", (0, 85))
-    brick.display.text(("X" if xbox else "/\\") + ": horn", (0, 95))
-    brick.display.text(("Y" if xbox else "[]") + ": sound effect", (0, 105))
-    brick.display.text("Gearbox:" + ("manual" if gearbox_mode == gearbox_manual else "automatic"), (0, 125))
+    brick.display.text("Rov3r+", (60, 10))
+    brick.display.text(("Xbox" if xbox else "PS") + " gamepad functions:", (0, 30))
+    brick.display.text("Left Stick: movement", (0, 45))
+    brick.display.text(("RB/LB" if xbox else "R1/L1") + ": gear up/down", (0, 55))
+    brick.display.text(("A" if xbox else "X") + ": auto comfort/sport", (0, 65))
+    brick.display.text(("RT" if xbox else "R2") + ": steer. speed bump", (0, 75))
+    brick.display.text(("X" if xbox else "/\\") + ": horn", (0, 85))
+    brick.display.text(("Y" if xbox else "[]") + ": sound effect", (0, 95))
+    brick.display.text("Gearbox:" + ("manual" if gearbox_mode == gearbox_manual
+        else "auto comfort" if gearbox_mode == gearbox_auto_comfort else "auto sport"), (0, 125))
 
-def drive(_power_pos, _bump_factor):
-    global power_pos, bump_factor
+def drive(_power_pos, _power_bump, _power_compensation):
+    """
+    Sets current power settings for driving motors.
+    """
+    global power_pos, power_bump, power_compensation
     if _power_pos == None:
         _power_pos = power_pos
-    if _bump_factor == None:
-        _bump_factor = bump_factor
-    if power_pos != _power_pos or bump_factor != _bump_factor:
+    if _power_bump == None:
+        _power_bump = power_bump
+    if _power_compensation == None:
+        _power_compensation = power_compensation
+    #print("Drive: ", _power_pos, _power_bump, _power_compensation)
+    if power_pos != _power_pos or power_bump != _power_bump or power_compensation != _power_compensation:
         power_pos = _power_pos
-        bump_factor = _bump_factor
-        propulsion_power = power_pos * (1 + bump_factor)    
+        power_bump = _power_bump
+        power_compensation = _power_compensation
+        propulsion_power = power_pos * (1 + power_bump) * power_compensation
         first_motor.dc(propulsion_power)
         second_motor.dc(propulsion_power)
 
+
 def steer(_steering_pos):
+    """
+    Sets steering position.
+    Computes required motor angle and rotates the steering motor there.
+    """
     global steering_pos
     if steering_pos != _steering_pos:
         steering_pos = _steering_pos
@@ -211,70 +252,133 @@ def steer(_steering_pos):
         steering_motor.track_target(steering_angle)
 
 def switch_gear(_gear):
+    """
+    Switches gear of the gearbox.
+    Computes required angle of the gearbox motor and rotates it to that position.
+    """
     global gear
     if gear != _gear:
         gear = _gear
         gearing_angle = - (gear - 1) * 20 / 12 * 90
         gearbox_motor.track_target(gearing_angle)
+        reset_automatic_gearbox()
 
+def select_gearbox_mode(mode):
+    """
+    Sets current steering mode (automatic comfort, automatic sport or manual).
+    Indicates current mode via beeps (one, two or three).
+    """
+    global gearbox_mode
+    if mode != gearbox_mode:
+        gearbox_mode = mode
+        print_help()
+        if gearbox_mode == gearbox_auto_comfort:
+            brick.sound.beeps(1)
+        elif gearbox_mode == gearbox_auto_sport:
+            brick.sound.beeps(2)
+        elif gearbox_mode == gearbox_manual:
+            brick.sound.beeps(3)
+
+# Variables to hold state of the automatic gearbox
 gear_up_time = 0
 gear_down_time = 0
-last_debug_time = 0
+comfort_time = 0
+comfort_factor = 0
+comfort_duration = 0
+
+def reset_automatic_gearbox():
+    """
+    Aborts power compensation process and resets power compensation.
+    This is for automtic comfort gearbox mode only.
+    """    
+    gear_up_time = 0
+    gear_down_time = 0
+    power_compensation = 1.0
 
 def automatic_gearbox_control():
-    global gear_up_time, gear_down_time, last_debug_time
+    """
+    This function is called very often (many times for second) and is active
+    only for automatic gearbox modes. 
+    Checks current power and speed of the driving motors and switches to
+    the next or previous gear of the gearbox when necessary.
+    For automatic comfort gearbox: decreases motor power after gearing up or
+    increases motor power after gearing down, to compensate for changed gear
+    ratio in order to prevent jerky linear movement. The motor power is then
+    smoothly correctd back to its original value within 0.5-2 seconds.
+    """
+    global gear_up_time, gear_down_time
+    global comfort_time, comfort_factor, comfort_duration
 
     speed = abs(first_motor.speed())
-
-    #tm = time.time()
-    #if round(tm) != round(last_debug_time):
-    #    print(speed, power_pos, tm - gear_up_time)
-    #last_debug_time = tm
+    current_time = time.time()
 
     # Did we stop?
     if abs(power_pos) == 0 and speed == 0 and gear > 1:
         #print("Reset gear to", 1)
         switch_gear(1)
 
-    gear_data = automatic_gearbox[gear - 1]
+    comfort = gearbox_mode == gearbox_auto_comfort
+    gearbox = automatic_comfort_gearbox if comfort else automatic_sport_gearbox
+    gear_data = gearbox[gear - 1]
+    power_compensation_in_progress = abs(power_compensation - 1.0) > 0.01
 
     # Can we gear up?
-    if abs(power_pos) >= gear_data[1] and speed >= gear_data[2]:
-        tm = time.time()
+    if abs(power_pos) >= gear_data[1] and speed >= gear_data[2] and not power_compensation_in_progress:
         if gear_up_time == 0:
-            gear_up_time = tm
-        elif tm - gear_up_time >= gear_data[3] and gear < len(automatic_gearbox):
+            gear_up_time = current_time
+        elif current_time - gear_up_time >= gear_data[3] and gear < len(gearbox):
             # It's time to switch to the next gear 
             #print("Gear up to", gear + 1)
             switch_gear(gear + 1)
+            if comfort:
+                comfort_time = current_time
+                comfort_factor = gear_data[7]
+                comfort_duration = gear_data[8]
+                #print("Compensate drive power", comfort_factor, comfort_duration, comfort_time)
+                drive(None, None, comfort_factor)
             gear_up_time = 0
     else:
         gear_up_time = 0
 
     # Should we gear down?
-    if abs(power_pos) <= gear_data[4] or speed <= gear_data[5]:
-        tm = time.time()
+    if abs(power_pos) <= gear_data[4] or speed <= gear_data[5] and not power_compensation_in_progress:
         if gear_down_time == 0:
-            gear_down_time = tm
-        elif tm - gear_down_time >= gear_data[6] and gear > 1:
+            gear_down_time = current_time
+        elif current_time - gear_down_time >= gear_data[6] and gear > 1:
             # It's time to switch to the previous gear 
-            #print("Gear down to", gear + 1)
+            #print("Gear down to", gear - 1)
             switch_gear(gear - 1)
+            if comfort:
+                comfort_time = current_time
+                comfort_factor = gear_data[9]
+                comfort_duration = gear_data[10]
+                #print("Compensate drive power", comfort_factor, comfort_duration, comfort_time)
+                drive(None, None, comfort_factor)
             gear_down_time = 0
     else:
         gear_down_time = 0
 
-def select_gearbox_mode(mode):
-    global gearbox_mode
-    if mode != gearbox_mode:
-        gearbox_mode = mode
-        print_help()
-        if gearbox_mode == gearbox_manual:
-            brick.sound.beeps(1)
+    # Comfort gearbox: gradually adjust power factor compensation after switching to a higher gear
+    if comfort_time > 0 and current_time > comfort_time:
+        duration = current_time - comfort_time
+        if duration < comfort_duration:
+            if comfort_factor < 1.0:
+                # Gear up
+                compensation = comfort_factor + (1.0 - comfort_factor) * duration / comfort_duration
+            else:
+                # Gear down
+                compensation = comfort_factor - (comfort_factor - 1.0) * duration / comfort_duration
+            #print("Compensate drive power", compensation, comfort_factor, comfort_duration, comfort_time, current_time, duration)
         else:
-            brick.sound.beeps(2)
+            #print("Reset drive power")
+            compensation = 1.0
+            comfort_time = 0
+        drive(None, None, compensation)
 
 def process_gamepad_event(device_file):
+    """
+    Reads events from the gamepad device virtual file and processes them.
+    """
     # Read from the gamepad device virtual file
     event = device_file.read(gamepad_event_size)
 
@@ -286,13 +390,13 @@ def process_gamepad_event(device_file):
             steer(transform_stick(value))
 
         elif ev_type == 3 and code == 1: # Left Stick Vert. Axis
-            drive(transform_stick(value), None)
+            drive(-transform_stick(value), None, None)
 
         elif xbox and ev_type == 3 and code == 9: # Xbox Right Trigger
-            drive(None, value / 1024)
+            drive(None, value / 1024, None)
 
         elif not xbox and ev_type == 3 and code == 5: # PS R2 paddle
-            drive(None, value / 256)
+            drive(None, value / 256, None)
 
         elif ev_type == 1 and code == 311 and value == 1: # RB pressed
             switch_gear(min(gear + 1, 4))
@@ -303,7 +407,7 @@ def process_gamepad_event(device_file):
             select_gearbox_mode(gearbox_manual)
 
         elif ev_type == 1 and code == 304 and value == 1: # A pressed
-            select_gearbox_mode(gearbox_auto)
+            select_gearbox_mode(gearbox_auto_comfort if gearbox_mode == gearbox_auto_sport else gearbox_auto_sport)
 
         elif ev_type == 1 and code == 307 and value == 1: # X pressed
             play_horn()
@@ -345,6 +449,6 @@ while True:
         # Here we can check sensors or do some other work.
         if gearbox_mode != gearbox_manual:
             automatic_gearbox_control()
-        time.sleep(0.010) # sleep a little to reduce power consumption
+        time.sleep(0.010) # sleep a little to reduce CPU load and power consumption
 
 gamepad_infile.close() # will never executed actually, due to endless while loop
