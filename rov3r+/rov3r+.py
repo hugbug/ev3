@@ -100,6 +100,7 @@ power_pos = 0 # Current motor power (controlled by Y-axis of gamepad left stick)
 power_bump = 0 # Power bump (controller by right trigger)
 power_compensation = 1.0 # Power compensation after switching gears in comfort automatic mode
 steering_pos = 0 # Steering position (-100..100)
+motors = 2 # Use two motors
 
 # An events read from the virtual device file consists of the following elements:
 # long int, long int, unsigned short, unsigned short, long int
@@ -116,6 +117,7 @@ try:
     second_motor = Motor(Port.D, Direction.COUNTERCLOCKWISE)
     steering_motor = Motor(Port.B)
     gearbox_motor = Motor(Port.C)
+    second_motor.stop(Stop.COAST)
 except:
     brick.display.text("Check motor cables", (0, 80))
     brick.sound.file(SoundFile.ERROR_ALARM)
@@ -213,11 +215,13 @@ def print_help():
     brick.display.text("Left Stick: movement", (0, 45))
     brick.display.text(("RB/LB" if xbox else "R1/L1") + ": gear up/down", (0, 55))
     brick.display.text(("A" if xbox else "X") + ": auto comfort/sport", (0, 65))
-    brick.display.text(("RT" if xbox else "R2") + ": steer. speed bump", (0, 75))
-    brick.display.text(("X" if xbox else "/\\") + ": horn", (0, 85))
-    brick.display.text(("Y" if xbox else "[]") + ": sound effect", (0, 95))
-    brick.display.text("Gearbox:" + ("manual" if gearbox_mode == gearbox_manual
-        else "auto comfort" if gearbox_mode == gearbox_auto_comfort else "auto sport"), (0, 125))
+    brick.display.text(("B" if xbox else "O") + ": one/two motors", (0, 75))
+    brick.display.text(("RT" if xbox else "R2") + ": steer. speed bump", (0, 85))
+    brick.display.text(("X" if xbox else "/\\") + ": horn", (0, 95))
+    brick.display.text(("Y" if xbox else "[]") + ": sound effect", (0, 105))
+    brick.display.text((("manual" if gearbox_mode == gearbox_manual
+        else "auto comfort" if gearbox_mode == gearbox_auto_comfort else "auto sport")) +
+        ", " + str(motors) + " motor" + ("s" if motors > 1 else ""), (0, 125))
 
 def drive(_power_pos, _power_bump, _power_compensation):
     """
@@ -237,8 +241,10 @@ def drive(_power_pos, _power_bump, _power_compensation):
         power_compensation = _power_compensation
         propulsion_power = power_pos * (1 + power_bump) * power_compensation
         first_motor.dc(propulsion_power)
-        second_motor.dc(propulsion_power)
-
+        if motors == 2:
+            second_motor.dc(propulsion_power)
+        else:
+            second_motor.stop(Stop.COAST)
 
 def steer(_steering_pos):
     """
@@ -279,7 +285,17 @@ def select_gearbox_mode(mode):
         elif gearbox_mode == gearbox_manual:
             brick.sound.beeps(3)
 
-# Variables to hold state of the automatic gearbox
+def select_motors(motor_count):
+    global motors
+    if motors != motor_count:
+        motors = motor_count
+        print_help()
+        brick.sound.beeps(motors)
+        # Start or stop second motor.
+        # We increase current power a little so that function "drive" see some changes to process.
+        drive(power_pos + 1, None, None)
+
+# Variables to hold state of the automatic gearbox.
 gear_up_time = 0
 gear_down_time = 0
 comfort_time = 0
@@ -408,6 +424,9 @@ def process_gamepad_event(device_file):
 
         elif ev_type == 1 and code == 304 and value == 1: # A pressed
             select_gearbox_mode(gearbox_auto_comfort if gearbox_mode == gearbox_auto_sport else gearbox_auto_sport)
+
+        elif ev_type == 1 and code == 305 and value == 1: # B pressed
+            select_motors(2 if motors == 1 else 1)
 
         elif ev_type == 1 and code == 307 and value == 1: # X pressed
             play_horn()
