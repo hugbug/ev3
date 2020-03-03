@@ -36,4 +36,4 @@ Please refer to LEGO MicroPython documentation for details.
 # How the program works
 
 More details about the internals of the program can be found in article 
-[Using Xbox One Controller with MicroPython on EV3](https://github.com/hugbug/ev3/wiki/Using-Xbox-One-Controller-with-MicroPython-on-EV3).
+[Using Xbox One Controller with MicroPython on EV3](https://github.com/hugbug/ev3/wiki/Using-Xbox-One-Controller-with-MicroPython-on-EV3) and [Reading gamepad events and doing other work at the same time in MicroPython on EV3](https://github.com/hugbug/ev3/wiki/Reading-gamepad-events-and-doing-other-work-at-the-same-time-in-MicroPython-on-EV3).
